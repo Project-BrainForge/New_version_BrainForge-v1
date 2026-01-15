@@ -10,6 +10,7 @@ import os
 import json
 import csv
 import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -912,29 +913,67 @@ def evaluate_temporal_metrics(predictions, targets):
 
 
 # ============================================
+# Command Line Arguments
+# ============================================
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Train CNN-Transformer Hybrid Model for EEG Source Activity Mapping')
+    
+    # Model configuration
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+    parser.add_argument('--epochs', type=int, default=200, help='Number of training epochs')
+    parser.add_argument('--learning_rate', type=float, default=2e-4, help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=1e-5, help='Weight decay for optimizer')
+    parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
+    parser.add_argument('--gradient_clip', type=float, default=1.0, help='Gradient clipping value')
+    parser.add_argument('--patience', type=int, default=25, help='Early stopping patience')
+    
+    # Checkpoint and logging
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
+    parser.add_argument('--checkpoint_interval', type=int, default=10, help='Save checkpoint every N epochs')
+    parser.add_argument('--log_dir', type=str, default='logs', help='Directory to save logs')
+    parser.add_argument('--experiment_name', type=str, default=None, help='Experiment name (auto-generated if None)')
+    
+    # Data configuration
+    parser.add_argument('--data_dir', type=str, default='labeled_spikes_data/labeled_spikes_data', help='Path to data directory')
+    parser.add_argument('--use_augmentation', type=bool, default=True, help='Use data augmentation')
+    
+    # Model architecture
+    parser.add_argument('--d_model', type=int, default=256, help='Transformer model dimension')
+    parser.add_argument('--nhead', type=int, default=8, help='Number of attention heads')
+    parser.add_argument('--num_transformer_layers', type=int, default=4, help='Number of transformer layers')
+    
+    return parser.parse_args()
+
+
+# ============================================
 # Main Execution
 # ============================================
 
 if __name__ == "__main__":
-    # Configuration
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Build config from arguments
     best_config = {
         'model_type': 'hybrid',
-        'batch_size': 32,  # Adjust based on GPU memory
-        'epochs': 200,
-        'learning_rate': 2e-4,
-        'weight_decay': 1e-5,
-        'dropout': 0.2,  # Higher dropout for regularization
-        'gradient_clip': 1.0,
-        'patience': 25,
-        'use_augmentation': True,
-        'checkpoint_dir': 'checkpoints',  # Directory to save checkpoints
-        'checkpoint_interval': 10,  # Save checkpoint every 10 epochs
-        'log_dir': 'logs',  # Directory to save logs
-        'experiment_name': None  # None = auto-generate with timestamp
+        'batch_size': args.batch_size,
+        'epochs': args.epochs,
+        'learning_rate': args.learning_rate,
+        'weight_decay': args.weight_decay,
+        'dropout': args.dropout,
+        'gradient_clip': args.gradient_clip,
+        'patience': args.patience,
+        'use_augmentation': args.use_augmentation,
+        'checkpoint_dir': args.checkpoint_dir,
+        'checkpoint_interval': args.checkpoint_interval,
+        'log_dir': args.log_dir,
+        'experiment_name': args.experiment_name
     }
     
     # Load data from MAT files
-    data_dir = Path('labeled_spikes_data') / 'labeled_spikes_data'
+    data_dir = Path(args.data_dir)
     print("=" * 60)
     print("Loading Dataset from MAT Files")
     print("=" * 60)

@@ -10,6 +10,7 @@ import os
 import json
 import csv
 import logging
+import argparse
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -1065,32 +1066,79 @@ def train_eeg_vit(eeg_data, source_data, config=None):
 # Main Execution
 # ============================================
 
+# ============================================
+# Command Line Arguments
+# ============================================
+
+def parse_arguments():
+    """Parse command line arguments for EEG-ViT training"""
+    parser = argparse.ArgumentParser(description='Train EEG Vision Transformer for Source Activity Mapping')
+    
+    # Model architecture
+    parser.add_argument('--patch_size', type=int, default=5, help='Number of time points per patch')
+    parser.add_argument('--d_model', type=int, default=256, help='Embedding dimension')
+    parser.add_argument('--depth', type=int, default=8, help='Number of transformer blocks')
+    parser.add_argument('--heads', type=int, default=8, help='Number of attention heads')
+    
+    # Training parameters
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+    parser.add_argument('--epochs', type=int, default=200, help='Number of training epochs')
+    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=1e-5, help='Weight decay for optimizer')
+    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
+    parser.add_argument('--warmup_epochs', type=int, default=10, help='Number of warmup epochs')
+    parser.add_argument('--gradient_clip', type=float, default=1.0, help='Gradient clipping value')
+    parser.add_argument('--patience', type=int, default=25, help='Early stopping patience')
+    
+    # Data augmentation
+    parser.add_argument('--use_augmentation', type=bool, default=True, help='Use data augmentation')
+    parser.add_argument('--use_mixup', type=bool, default=False, help='Use mixup augmentation')
+    
+    # Checkpoint and logging
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
+    parser.add_argument('--checkpoint_interval', type=int, default=10, help='Save checkpoint every N epochs')
+    parser.add_argument('--log_dir', type=str, default='logs', help='Directory to save logs')
+    parser.add_argument('--experiment_name', type=str, default=None, help='Experiment name (auto-generated if None)')
+    
+    # Data configuration
+    parser.add_argument('--data_dir', type=str, default='labeled_spikes_data/labeled_spikes_data', help='Path to data directory')
+    
+    return parser.parse_args()
+
+
+# ============================================
+# Main Execution
+# ============================================
+
 if __name__ == "__main__":
-    # Optimal configuration
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Build config from arguments
     optimal_config = {
         'model_type': 'eeg_vit',
-        'patch_size': 5,      # 100 patches of 5 time points
-        'd_model': 256,       # Embedding dimension
-        'depth': 8,           # 8 transformer blocks
-        'heads': 8,           # 8 attention heads
-        'learning_rate': 1e-4,
-        'batch_size': 32,
-        'epochs': 200,
-        'dropout': 0.1,
-        'weight_decay': 1e-5,
-        'warmup_epochs': 10,
-        'gradient_clip': 1.0,
-        'patience': 25,
-        'use_augmentation': True,
-        'use_mixup': False,
-        'checkpoint_dir': 'checkpoints',
-        'checkpoint_interval': 10,
-        'log_dir': 'logs',
-        'experiment_name': None  # Auto-generate with timestamp
+        'patch_size': args.patch_size,
+        'd_model': args.d_model,
+        'depth': args.depth,
+        'heads': args.heads,
+        'learning_rate': args.learning_rate,
+        'batch_size': args.batch_size,
+        'epochs': args.epochs,
+        'dropout': args.dropout,
+        'weight_decay': args.weight_decay,
+        'warmup_epochs': args.warmup_epochs,
+        'gradient_clip': args.gradient_clip,
+        'patience': args.patience,
+        'use_augmentation': args.use_augmentation,
+        'use_mixup': args.use_mixup,
+        'checkpoint_dir': args.checkpoint_dir,
+        'checkpoint_interval': args.checkpoint_interval,
+        'log_dir': args.log_dir,
+        'experiment_name': args.experiment_name
     }
     
     # Load data from MAT files
-    data_dir = Path('labeled_spikes_data') / 'labeled_spikes_data'
+    data_dir = Path(args.data_dir)
     print("=" * 60)
     print("Loading Dataset from MAT Files")
     print("=" * 60)
