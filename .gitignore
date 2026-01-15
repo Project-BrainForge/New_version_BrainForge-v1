@@ -1,6 +1,7 @@
 __pycache__/
 logs/
 checkpoints/
+inference_results/
 .vscode/
 *.pyc
 
@@ -17,3 +18,5 @@ checkpoints/
 *.pyzwzwzw
 
 labeled_spikes_data/
+*.mat
+!labeled_spikes_data/**/*.mat
