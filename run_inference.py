@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 import numpy as np
+import glob
 import torch
 import torch.nn as nn
 from scipy.io import loadmat, savemat
@@ -127,89 +128,105 @@ def load_model_checkpoint(checkpoint_path, model_type='hybrid', device='cpu'):
     return model, checkpoint
 
 
-def process_mat_files(input_dir, output_dir, model, device, batch_size=32):
+def process_mat_files(folder_name, model, device, model_id, checkpoint_name, normalize=True, output_dir='result/hybrid', data_pattern='sample_*_eeg.mat', batch_size=32, save_individual=False):
     """
-    Process all MAT files in input directory and save predictions
+    Process all MAT files in folder and save predictions
     
     Args:
-        input_dir: Directory containing input MAT files
-        output_dir: Directory to save output MAT files
+        folder_name: Folder containing input MAT files
         model: Trained model
         device: Device to run inference on
-        batch_size: Batch size for inference
+        model_id: Model ID for output naming
+        checkpoint_name: Checkpoint name for output naming
+        normalize: Whether to normalize data by max absolute value
+        output_dir: Directory to save output files
+        data_pattern: File pattern to match (e.g., 'sample_*_eeg.mat' or 'data*.mat')
+        batch_size: Batch size for processing
+        save_individual: Save individual prediction files
     """
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    folder_path = Path(folder_name)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
     
-    # Find all MAT files
-    mat_files = sorted([f for f in input_dir.glob('*.mat') if 'sample_' in f.name])
+    # Find all matching MAT files
+    flist = glob.glob(str(folder_path / data_pattern))
     
-    if len(mat_files) == 0:
-        print(f'WARNING: No MAT files found in {input_dir}')
-        return
+    if len(flist) == 0:
+        print(f'WARNING: NO FILES FOUND in {folder_name} matching pattern {data_pattern}')
+        return None
     
-    print(f"Found {len(mat_files)} MAT files to process")
+    # Sort files based on natural number
+    flist = sorted(flist)
     
-    all_predictions = []
-    all_targets = []
+    print(f"Found {len(flist)} files in {folder_name}")
+    
+    test_data = []
     file_names = []
     
-    # Process files in batches
-    for i in tqdm(range(0, len(mat_files), batch_size), desc="Processing batches"):
-        batch_files = mat_files[i:i+batch_size]
-        batch_eeg = []
-        batch_source = []
-        batch_names = []
-        
-        for mat_file in batch_files:
-            try:
-                data = loadmat(str(mat_file))
-                
-                if 'eeg_data' not in data or 'source_data' not in data:
-                    continue
-                
-                eeg = data['eeg_data']  # Shape: (500, 75)
-                source = data['source_data']  # Shape: (500, 994)
-                
-                # Normalize if needed (optional)
-                # eeg = eeg / np.max(np.abs(eeg))
-                
-                batch_eeg.append(eeg)
-                batch_source.append(source)
-                batch_names.append(mat_file.name)
-                
-            except Exception as e:
-                print(f"Error loading {mat_file.name}: {e}")
+    # Load and preprocess data
+    for i in flist:
+        try:
+            # Try loading with 'eeg_data' key first (new format)
+            data_dict = loadmat(i)
+            if 'eeg_data' in data_dict:
+                data = data_dict['eeg_data']  # Shape: (500, 75)
+            elif 'data' in data_dict:
+                data = data_dict['data']  # Shape: (500, 75) - old format
+            else:
+                print(f"  WARNING: {os.path.basename(i)} - no 'eeg_data' or 'data' key found")
                 continue
-        
-        if len(batch_eeg) == 0:
+            
+            # Normalize by max absolute value
+            if normalize:
+                data = data / np.max(np.abs(data[:]))
+            
+            test_data.append(data)
+            file_names.append(os.path.basename(i))
+        except Exception as e:
+            print(f"  Error loading {i}: {e}")
             continue
+    
+    if len(test_data) == 0:
+        print(f'WARNING: No valid data loaded from {folder_name}')
+        return None
+    
+    # Process in batches
+    all_out = []
+    
+    for batch_idx in range(0, len(test_data), batch_size):
+        batch_end = min(batch_idx + batch_size, len(test_data))
+        batch_data = test_data[batch_idx:batch_end]
+        batch_names = file_names[batch_idx:batch_end]
         
-        # Convert to tensors
-        batch_eeg_tensor = torch.FloatTensor(np.array(batch_eeg)).to(device)
+        # Convert to tensor: (batch, 500, 75)
+        data_tensor = torch.from_numpy(np.array(batch_data)).to(device, torch.float)
         
         # Run inference
+        model.eval()
         with torch.no_grad():
-            predictions = model(batch_eeg_tensor)
-            predictions_np = predictions.cpu().numpy()
+            out = model(data_tensor)  # Output: (batch, 500, 994)
         
-        # Store results
-        all_predictions.extend(predictions_np)
-        all_targets.extend(batch_source)
-        file_names.extend(batch_names)
+        # Get predictions
+        batch_out = out.detach().cpu().numpy()
+        all_out.extend(batch_out)
         
-        # Save individual predictions
-        for j, (pred, name) in enumerate(zip(predictions_np, batch_names)):
-            output_file = output_dir / f'pred_{name}'
-            savemat(str(output_file), {
-                'prediction': pred,
-                'eeg_data': batch_eeg[j],
-                'source_data': batch_source[j],
-                'file_name': name
-            })
+        # Save individual files if requested
+        if save_individual:
+            for j, (pred, name) in enumerate(zip(batch_out, batch_names)):
+                output_file = output_path / f'pred_{name}'
+                try:
+                    savemat(str(output_file), {'prediction': pred})
+                except Exception as e:
+                    print(f"  Error saving {output_file}: {e}")
     
-    return all_predictions, all_targets, file_names
+    # Save aggregated results
+    all_out_array = np.array(all_out)
+    output_file = output_path / f'all_predictions_{checkpoint_name}.mat'
+    savemat(str(output_file), {'all_out': all_out_array, 'file_names': file_names})
+    
+    print(f'Saved {len(all_out)} predictions to: {output_file}')
+    
+    return all_out_array
 
 
 def evaluate_predictions(predictions, targets):
@@ -232,140 +249,152 @@ def evaluate_predictions(predictions, targets):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Run Inference on EEG to Source Activity Models')
+    start_time = time.time()
     
-    # Model arguments
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='EEG to Source Activity Model Inference')
+    
+    # ============ Model Arguments ============
+    parser.add_argument('--device', default='cpu', type=str, help='Device to run on (cpu or cuda)')
+    parser.add_argument('--model_id', type=int, default=1, help='Model ID')
     parser.add_argument('--model_type', type=str, default='hybrid',
                        choices=['hybrid', 'eeg_vit', 'vit_channel', 'cnn_vit'],
                        help='Type of model to use')
-    parser.add_argument('--checkpoint', type=str, required=True,
-                       help='Path to model checkpoint file')
-    parser.add_argument('--device', type=str, default='auto',
-                       help='Device to use (auto, cpu, cuda)')
+    parser.add_argument('--resume', default='best', type=str, 
+                       help='Checkpoint to resume (e.g., epoch_010 or best)')
+    parser.add_argument('--checkpoint', type=str, default='',
+                       help='Direct path to checkpoint file (overrides model_id/resume)')
+    parser.add_argument('--checkpoint_path', type=str, default='',
+                       help='Alternative path argument for checkpoint file')
     
-    # Data arguments
-    parser.add_argument('--input_dir', type=str, 
-                       default='labeled_spikes_data/labeled_spikes_data',
-                       help='Directory containing input MAT files')
-    parser.add_argument('--output_dir', type=str, default='inference_results',
-                       help='Directory to save output predictions')
-    parser.add_argument('--subject', type=str, default=None,
-                       help='Specific subject/folder to process (optional)')
+    # ============ Data Arguments ============
+    parser.add_argument('--input_dir', type=str, default='labeled_spikes_data/labeled_spikes_data',
+                       help='Input directory containing MAT files')
+    parser.add_argument('--output_dir', type=str, default='result/hybrid',
+                       help='Output directory to save predictions')
+    parser.add_argument('--subject_list', type=str, nargs='+', default=['VEP'],
+                       help='List of subjects/folders to process (e.g., VEP or source/VEP)')
+    parser.add_argument('--data_pattern', type=str, default='sample_*_eeg.mat',
+                       help='File pattern to match (e.g., data*.mat or sample_*_eeg.mat)')
     
-    # Inference arguments
+    # ============ Processing Arguments ============
     parser.add_argument('--batch_size', type=int, default=32,
                        help='Batch size for inference')
-    parser.add_argument('--save_individual', action='store_true',
+    parser.add_argument('--normalize', action='store_true', default=True,
+                       help='Normalize data by max absolute value')
+    parser.add_argument('--save_individual', action='store_true', default=False,
                        help='Save individual prediction files')
-    parser.add_argument('--evaluate', action='store_true',
-                       help='Evaluate predictions against ground truth')
+    parser.add_argument('--evaluate', action='store_true', default=False,
+                       help='Evaluate predictions if ground truth available')
+    
+    # ============ Other Arguments ============
+    parser.add_argument('--info', default='', type=str, help='Additional information about this model')
     
     args = parser.parse_args()
     
-    # Set device
-    if args.device == 'auto':
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    else:
-        device = torch.device(args.device)
+    # ======================= PREPARE PARAMETERS =====================================================================================================
+    use_cuda = torch.cuda.is_available() and args.device != 'cpu'
+    device = torch.device(args.device if use_cuda else "cpu")
     
     print("=" * 60)
     print("EEG to Source Activity Inference")
     print("=" * 60)
     print(f"Device: {device}")
-    print(f"Model type: {args.model_type}")
-    print(f"Checkpoint: {args.checkpoint}")
-    print(f"Input directory: {args.input_dir}")
-    print(f"Output directory: {args.output_dir}")
+    print(f"Model ID: {args.model_id}")
+    print(f"Model Type: {args.model_type}")
     print("=" * 60)
     
-    start_time = time.time()
+    # =============================== LOAD MODEL =====================================================================================================
+    if args.checkpoint:
+        # Use --checkpoint argument (preferred)
+        fn = args.checkpoint
+        checkpoint_name = os.path.basename(fn).replace('.pth', '').replace('.tar', '')
+    elif args.checkpoint_path:
+        # Use checkpoint_path argument
+        fn = args.checkpoint_path
+        checkpoint_name = os.path.basename(fn).replace('.pth', '').replace('.tar', '')
+    else:
+        # Use model_id structure (like original)
+        result_root = f'logs/experiment_*/checkpoints'  # Search in logs
+        # Try to find checkpoint
+        if args.resume:
+            if args.resume == 'best':
+                fn_pattern = f'logs/*/checkpoints/best_{args.model_type}_model.pth'
+            else:
+                fn_pattern = f'logs/*/checkpoints/checkpoint_{args.resume}.pth'
+        else:
+            fn_pattern = f'logs/*/checkpoints/best_{args.model_type}_model.pth'
+        
+        import glob as glob_module
+        matches = glob_module.glob(fn_pattern)
+        if len(matches) == 0:
+            print(f"ERROR: No checkpoint found matching pattern: {fn_pattern}")
+            return
+        fn = matches[0]  # Use first match
+        checkpoint_name = os.path.basename(fn).replace('.pth', '').replace('.tar', '')
+    
+    print(f"=> Load checkpoint: {fn}")
+    
+    if not os.path.isfile(fn):
+        print(f"ERROR: no checkpoint found at {fn}")
+        return
     
     # Load model
     try:
         model, checkpoint = load_model_checkpoint(
-            args.checkpoint, 
+            fn,
             model_type=args.model_type,
             device=device
         )
     except Exception as e:
         print(f"ERROR: Failed to load model: {e}")
-        return
-    
-    print(f"Model loaded in {time.time() - start_time:.2f} seconds")
-    
-    # Prepare input directory
-    input_dir = Path(args.input_dir)
-    if args.subject:
-        input_dir = input_dir / args.subject
-    
-    if not input_dir.exists():
-        print(f"ERROR: Input directory not found: {input_dir}")
-        return
-    
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Process files
-    print("\n" + "=" * 60)
-    print("Processing MAT files...")
-    print("=" * 60)
-    
-    process_start = time.time()
-    
-    try:
-        predictions, targets, file_names = process_mat_files(
-            input_dir,
-            output_dir,
-            model,
-            device,
-            batch_size=args.batch_size
-        )
-        
-        print(f"\nProcessed {len(predictions)} files in {time.time() - process_start:.2f} seconds")
-        
-        # Save aggregated results
-        if len(predictions) > 0:
-            aggregated_file = output_dir / f'all_predictions_{args.model_type}.mat'
-            savemat(str(aggregated_file), {
-                'predictions': np.array(predictions),
-                'targets': np.array(targets) if targets else None,
-                'file_names': file_names,
-                'model_type': args.model_type,
-                'checkpoint': args.checkpoint
-            })
-            print(f"Saved aggregated results to: {aggregated_file}")
-        
-        # Evaluate if requested and targets are available
-        if args.evaluate and targets and len(targets) > 0:
-            print("\n" + "=" * 60)
-            print("Evaluation Metrics")
-            print("=" * 60)
-            
-            metrics = evaluate_predictions(predictions, targets)
-            
-            for key, value in metrics.items():
-                if value is not None:
-                    print(f"{key}: {value:.6f}")
-            
-            # Save metrics
-            metrics_file = output_dir / f'evaluation_metrics_{args.model_type}.mat'
-            savemat(str(metrics_file), metrics)
-            print(f"\nSaved metrics to: {metrics_file}")
-        
-    except Exception as e:
-        print(f"ERROR during processing: {e}")
         import traceback
         traceback.print_exc()
         return
     
-    total_time = time.time() - start_time
-    print("\n" + "=" * 60)
-    print("Inference Complete!")
+    print('Number of parameters:', sum(p.numel() for p in model.parameters()))
+    print('Prepare time:', time.time() - start_time)
+    
+    # =============================== EVALUATION =====================================================================================================
+    model.eval()
+    
+    print(f"Input directory: {args.input_dir}")
+    print(f"Output directory: {args.output_dir}")
+    print(f"Batch size: {args.batch_size}")
+    print(f"Data pattern: {args.data_pattern}")
     print("=" * 60)
-    print(f"Total time: {total_time:.2f} seconds")
-    print(f"Results saved to: {output_dir}")
-    print("=" * 60)
+    
+    # Create output directory
+    output_dir_path = Path(args.output_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    # Process input directory
+    input_dir_path = Path(args.input_dir)
+    
+    if not input_dir_path.exists():
+        print(f'ERROR: Input directory {args.input_dir} does not exist')
+        return
+    
+    process_start = time.time()
+    
+    # Process files in input directory
+    all_out = process_mat_files(
+        str(input_dir_path),
+        model,
+        device,
+        args.model_id,
+        checkpoint_name,
+        normalize=args.normalize,
+        output_dir=args.output_dir,
+        data_pattern=args.data_pattern,
+        batch_size=args.batch_size,
+        save_individual=args.save_individual
+    )
+    
+    if all_out is not None:
+        print(f'Processed {args.input_dir} in {time.time() - process_start:.2f} seconds')
+    
+    print(f'\nTotal run time: {time.time() - start_time:.2f} seconds')
 
 
 if __name__ == '__main__':

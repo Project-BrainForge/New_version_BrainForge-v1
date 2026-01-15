@@ -1074,6 +1074,11 @@ def parse_arguments():
     """Parse command line arguments for EEG-ViT training"""
     parser = argparse.ArgumentParser(description='Train EEG Vision Transformer for Source Activity Mapping')
     
+    # Model type
+    parser.add_argument('--model_type', type=str, default='eeg_vit',
+                       choices=['eeg_vit', 'vit_channel', 'cnn_vit'],
+                       help='Type of model to train (eeg_vit, vit_channel, cnn_vit)')
+    
     # Model architecture
     parser.add_argument('--patch_size', type=int, default=5, help='Number of time points per patch')
     parser.add_argument('--d_model', type=int, default=256, help='Embedding dimension')
@@ -1116,7 +1121,7 @@ if __name__ == "__main__":
     
     # Build config from arguments
     optimal_config = {
-        'model_type': 'eeg_vit',
+        'model_type': args.model_type,
         'patch_size': args.patch_size,
         'd_model': args.d_model,
         'depth': args.depth,
