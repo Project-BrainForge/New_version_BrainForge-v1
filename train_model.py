@@ -428,7 +428,7 @@ def load_mat_files(data_dir):
     skipped = 0
     
     print("Loading MAT files...")
-    for mat_file in tqdm(mat_files):
+    for mat_file in tqdm(mat_files, disable=True):
         try:
             data = scipy.io.loadmat(str(mat_file))
             
@@ -624,7 +624,7 @@ def train_hybrid_model(eeg_data, source_data, config=None):
         model.train()
         train_loss = 0
         train_batches = 0
-        for batch_eeg, batch_source in tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Train]', leave=False):
+        for batch_eeg, batch_source in tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Train]', leave=False, disable=True):
             batch_eeg = batch_eeg.to(device)
             batch_source = batch_source.to(device)
             
@@ -651,7 +651,7 @@ def train_hybrid_model(eeg_data, source_data, config=None):
         val_loss = 0
         val_batches = 0
         with torch.no_grad():
-            for batch_eeg, batch_source in tqdm(val_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Val]', leave=False):
+            for batch_eeg, batch_source in tqdm(val_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Val]', leave=False, disable=True):
                 batch_eeg = batch_eeg.to(device)
                 batch_source = batch_source.to(device)
                 

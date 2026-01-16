@@ -881,7 +881,7 @@ def train_eeg_vit(eeg_data, source_data, config=None):
         train_loss = 0
         train_batches = 0
         
-        for batch_idx, (eeg, source) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Train]', leave=False)):
+        for batch_idx, (eeg, source) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Train]', leave=False, disable=True)):
             eeg, source = eeg.to(device), source.to(device)
             
             # Apply mixup if enabled
@@ -917,7 +917,7 @@ def train_eeg_vit(eeg_data, source_data, config=None):
         val_batches = 0
         
         with torch.no_grad():
-            for eeg, source in tqdm(val_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Val]', leave=False):
+            for eeg, source in tqdm(val_loader, desc=f'Epoch {epoch+1}/{config["epochs"]} [Val]', leave=False, disable=True):
                 eeg, source = eeg.to(device), source.to(device)
                 predictions = model(eeg)
                 loss = criterion(predictions, source)
