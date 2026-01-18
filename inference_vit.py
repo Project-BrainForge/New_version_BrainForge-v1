@@ -18,13 +18,15 @@ from train_model import (
 import scipy.io
 
 
-def load_eeg_data(data_path, max_samples=None):
+def load_eeg_data(data_path, max_samples=None, start_sample=0, end_sample=None):
     """
     Load EEG data from MAT file or directory
     
     Args:
         data_path: Path to MAT file or directory containing MAT files
         max_samples: Maximum number of samples to load (None = load all)
+        start_sample: Start index for range (inclusive). Default: 0
+        end_sample: End index for range (exclusive). Default: None (loads to end)
     
     Returns:
         eeg_data: numpy array of shape (n_samples, 500, 75) or (500, 75) for single file
@@ -48,7 +50,12 @@ def load_eeg_data(data_path, max_samples=None):
     elif data_path.is_dir():
         # Directory of MAT files
         print(f"Loading EEG files from directory: {data_path}")
-        eeg_data, _ = load_mat_files(data_path, max_samples=max_samples)
+        eeg_data, _ = load_mat_files(
+            data_path,
+            max_samples=max_samples,
+            start_sample=start_sample,
+            end_sample=end_sample
+        )
         return eeg_data
     
     else:
@@ -201,6 +208,10 @@ def main():
                         help='Path to EEG data (MAT file or directory with MAT files)')
     parser.add_argument('--max_samples', type=int, default=None,
                         help='Maximum number of samples to load (None = load all)')
+    parser.add_argument('--start_sample', type=int, default=0,
+                        help='Start index for sample range (inclusive). Default: 0')
+    parser.add_argument('--end_sample', type=int, default=None,
+                        help='End index for sample range (exclusive). Default: None (loads to end)')
     parser.add_argument('--output', type=str, default=None,
                         help='Path to save predictions (e.g., predictions.mat or predictions.npy)')
     parser.add_argument('--source_data', type=str, default=None,
@@ -219,7 +230,12 @@ def main():
     print("Vision Transformer ESI - Inference")
     print("=" * 60)
     
-    eeg_data = load_eeg_data(args.eeg_data, max_samples=args.max_samples)
+    eeg_data = load_eeg_data(
+        args.eeg_data,
+        max_samples=args.max_samples,
+        start_sample=args.start_sample,
+        end_sample=args.end_sample
+    )
     print(f"EEG data shape: {eeg_data.shape}")
     
     # Run inference

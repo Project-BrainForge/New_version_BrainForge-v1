@@ -567,7 +567,7 @@ class TemporalAugmentation:
 # Data Loading Functions
 # ============================================
 
-def load_mat_files(data_dir, max_samples=None):
+def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
     """
     Load all MAT files from the directory and extract EEG and source data
     
@@ -577,6 +577,8 @@ def load_mat_files(data_dir, max_samples=None):
     Args:
         data_dir: Path to directory containing MAT files
         max_samples: Maximum number of samples to load (None = load all)
+        start_sample: Start index for range (inclusive). Default: 0
+        end_sample: End index for range (exclusive). Default: None (loads to end)
     
     Returns:
         eeg_data: numpy array of shape (n_samples, 500, 75)
@@ -587,10 +589,15 @@ def load_mat_files(data_dir, max_samples=None):
     
     print(f"Found {len(mat_files)} sample MAT files")
     
-    # Limit samples if specified
+    # Limit samples if specified (max_samples takes precedence)
     if max_samples is not None and max_samples > 0:
         mat_files = mat_files[:max_samples]
-        print(f"Loading first {len(mat_files)} samples (max_samples={max_samples})")
+        print(f"Loading first {max_samples} samples (max_samples={max_samples})")
+    # Apply start_sample and end_sample range
+    elif start_sample != 0 or end_sample is not None:
+        original_count = len(mat_files)
+        mat_files = mat_files[start_sample:end_sample]
+        print(f"Loading samples [{start_sample}:{end_sample}] (got {len(mat_files)} samples from {original_count})")
     
     eeg_list = []
     source_list = []
@@ -1187,6 +1194,10 @@ def parse_arguments():
                         help='Path to directory containing MAT files')
     parser.add_argument('--max_samples', type=int, default=None,
                         help='Maximum number of samples to load from dataset (e.g., 50 to load first 50 files)')
+    parser.add_argument('--start_sample', type=int, default=0,
+                        help='Start index for sample range (inclusive). Default: 0')
+    parser.add_argument('--end_sample', type=int, default=None,
+                        help='End index for sample range (exclusive). Default: None (loads to end)')
     
     # Model arguments
     parser.add_argument('--model_type', type=str, default='vit', choices=['vit', 'hybrid'],
@@ -1241,6 +1252,8 @@ if __name__ == "__main__":
     config = {
         'model_type': args.model_type,
         'max_samples': args.max_samples,
+        'start_sample': args.start_sample,
+        'end_sample': args.end_sample,
         'patch_size_channels': args.patch_size_channels,
         'patch_size_time': args.patch_size_time,
         'd_model': args.d_model,
@@ -1266,7 +1279,12 @@ if __name__ == "__main__":
     print(f"Loading Dataset from {data_dir}")
     print("=" * 60)
     
-    eeg_data, source_data = load_mat_files(data_dir, max_samples=args.max_samples)
+    eeg_data, source_data = load_mat_files(
+        data_dir,
+        max_samples=args.max_samples,
+        start_sample=args.start_sample,
+        end_sample=args.end_sample
+    )
     
     print("\n" + "=" * 60)
     print(f"Training {config['model_type'].upper()} Model")
