@@ -567,7 +567,7 @@ class TemporalAugmentation:
 # Data Loading Functions
 # ============================================
 
-def load_mat_files(data_dir):
+def load_mat_files(data_dir, max_samples=None):
     """
     Load all MAT files from the directory and extract EEG and source data
     
@@ -576,6 +576,7 @@ def load_mat_files(data_dir):
     
     Args:
         data_dir: Path to directory containing MAT files
+        max_samples: Maximum number of samples to load (None = load all)
     
     Returns:
         eeg_data: numpy array of shape (n_samples, 500, 75)
@@ -585,6 +586,11 @@ def load_mat_files(data_dir):
     mat_files = sorted([f for f in data_dir.glob('*.mat') if 'sample_' in f.name])
     
     print(f"Found {len(mat_files)} sample MAT files")
+    
+    # Limit samples if specified
+    if max_samples is not None and max_samples > 0:
+        mat_files = mat_files[:max_samples]
+        print(f"Loading first {len(mat_files)} samples (max_samples={max_samples})")
     
     eeg_list = []
     source_list = []
@@ -1034,7 +1040,7 @@ def train_model(eeg_data, source_data, config=None, model=None):
 # Resume Training from Checkpoint
 # ============================================
 
-def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None):
+def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None, device='cpu'):
     """
     Load a checkpoint and resume training state
     
@@ -1043,11 +1049,16 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, scheduler=None):
         model: Model instance
         optimizer: Optimizer instance (optional)
         scheduler: Scheduler instance (optional)
+        device: Device to load model to ('cpu', 'cuda', or auto-detect)
     
     Returns:
         Dictionary with checkpoint information
     """
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    # Auto-detect device if needed
+    if device == 'auto':
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     
     # Load model state
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -1174,6 +1185,8 @@ def parse_arguments():
     # Data arguments
     parser.add_argument('--data_dir', type=str, default='labeled_spikes_data/labeled_spikes_data',
                         help='Path to directory containing MAT files')
+    parser.add_argument('--max_samples', type=int, default=None,
+                        help='Maximum number of samples to load from dataset (e.g., 50 to load first 50 files)')
     
     # Model arguments
     parser.add_argument('--model_type', type=str, default='vit', choices=['vit', 'hybrid'],
@@ -1227,6 +1240,7 @@ if __name__ == "__main__":
     # Build configuration from arguments
     config = {
         'model_type': args.model_type,
+        'max_samples': args.max_samples,
         'patch_size_channels': args.patch_size_channels,
         'patch_size_time': args.patch_size_time,
         'd_model': args.d_model,
@@ -1252,7 +1266,7 @@ if __name__ == "__main__":
     print(f"Loading Dataset from {data_dir}")
     print("=" * 60)
     
-    eeg_data, source_data = load_mat_files(data_dir)
+    eeg_data, source_data = load_mat_files(data_dir, max_samples=args.max_samples)
     
     print("\n" + "=" * 60)
     print(f"Training {config['model_type'].upper()} Model")
