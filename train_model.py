@@ -585,7 +585,15 @@ def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
         source_data: numpy array of shape (n_samples, 500, 994)
     """
     data_dir = Path(data_dir)
-    mat_files = sorted([f for f in data_dir.glob('*.mat') if 'sample_' in f.name])
+    
+    # Try to find MAT files with 'sample_' prefix first (local naming convention)
+    mat_files = sorted([f for f in data_dir.glob('sample_*.mat')])
+    
+    # If not found, try all MAT files (for compatibility with other naming schemes like Kaggle)
+    if len(mat_files) == 0:
+        mat_files = sorted([f for f in data_dir.glob('*.mat')])
+        if len(mat_files) > 0:
+            print(f"Warning: No files with 'sample_' prefix found. Using all MAT files ({len(mat_files)} files)")
     
     print(f"Found {len(mat_files)} sample MAT files")
     
@@ -656,7 +664,9 @@ def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
     if len(eeg_list) == 0:
         raise ValueError(
             f"No valid EEG data loaded from {data_dir}\n"
-            "Check that MAT files contain 'eeg_data' key with shape (500, 75)"
+            f"Found {len(mat_files)} MAT files, but none contained valid 'eeg_data'\n"
+            f"Checked files: {[f.name for f in mat_files[:5]]}{'...' if len(mat_files) > 5 else ''}\n"
+            f"Check that MAT files contain 'eeg_data' key with shape (500, 75)"
         )
     
     # Stack into arrays
