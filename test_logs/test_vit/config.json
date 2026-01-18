@@ -1,0 +1,20 @@
+{
+  "model_type": "vit",
+  "patch_size_channels": 5,
+  "patch_size_time": 10,
+  "d_model": 128,
+  "nhead": 4,
+  "num_transformer_layers": 2,
+  "dropout": 0.1,
+  "batch_size": 2,
+  "epochs": 2,
+  "learning_rate": 0.001,
+  "weight_decay": 1e-05,
+  "gradient_clip": 1.0,
+  "patience": 5,
+  "use_augmentation": false,
+  "log_dir": "test_logs",
+  "experiment_name": "test_vit",
+  "checkpoint_dir": "checkpoints",
+  "checkpoint_interval": 1
+}
