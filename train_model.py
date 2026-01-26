@@ -581,7 +581,7 @@ def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
     In production: replace with actual source data loading if available
     
     Args:
-        data_dir: Path to directory containing MAT files
+        data_dir: Path to directory containing MAT files (root level)
         max_samples: Maximum number of samples to load (None = load all)
         start_sample: Start index for range (inclusive). Default: 0
         end_sample: End index for range (exclusive). Default: None (loads to end)
@@ -592,32 +592,31 @@ def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
     """
     data_dir = Path(data_dir)
     
-    # Try to find MAT files with 'sample_' prefix first (local naming convention)
-    mat_files = sorted([f for f in data_dir.glob('sample_*.mat')])
+    # Find MAT files in root directory only
+    mat_files = sorted(data_dir.glob('*.mat'))
     
-    # If not found, try all MAT files (for compatibility with other naming schemes like Kaggle)
     if len(mat_files) == 0:
-        mat_files = sorted([f for f in data_dir.glob('*.mat')])
-        if len(mat_files) > 0:
-            print(f"Warning: No files with 'sample_' prefix found. Using all MAT files ({len(mat_files)} files)")
+        raise FileNotFoundError(f"No MAT files found in {data_dir}")
     
+    print(f"\nLoading Dataset from MAT Files")
+    print("=" * 60)
     print(f"Found {len(mat_files)} sample MAT files")
     
-    # Limit samples if specified (max_samples takes precedence)
-    if max_samples is not None and max_samples > 0:
-        mat_files = mat_files[:max_samples]
-        print(f"Loading first {max_samples} samples (max_samples={max_samples})")
-    # Apply start_sample and end_sample range
-    elif start_sample != 0 or end_sample is not None:
-        original_count = len(mat_files)
+    # Apply range filtering
+    if end_sample is not None:
         mat_files = mat_files[start_sample:end_sample]
-        print(f"Loading samples [{start_sample}:{end_sample}] (got {len(mat_files)} samples from {original_count})")
+    elif start_sample > 0:
+        mat_files = mat_files[start_sample:]
+    
+    if max_samples is not None:
+        mat_files = mat_files[:max_samples]
+    
+    print(f"Loading {len(mat_files)} files")
     
     eeg_list = []
     source_list = []
     skipped = 0
     
-    print("Loading MAT files...")
     for mat_file in tqdm(mat_files):
         try:
             data = scipy.io.loadmat(str(mat_file))
@@ -679,12 +678,9 @@ def load_mat_files(data_dir, max_samples=None, start_sample=0, end_sample=None):
     eeg_data = np.stack(eeg_list, axis=0)  # (n_samples, 500, 75)
     source_data = np.stack(source_list, axis=0)  # (n_samples, 500, 994)
     
-    print(f"\nLoaded data shapes:")
-    print(f"EEG data: {eeg_data.shape}")
-    print(f"Source data: {source_data.shape}")
-    
-    return eeg_data, source_data
-    print(f"Source data: {source_data.shape}")
+    print(f"\n✓ Loaded {len(eeg_list)} samples")
+    print(f"EEG data shape: {eeg_data.shape}")
+    print(f"Source data shape: {source_data.shape}")
     
     return eeg_data, source_data
 
