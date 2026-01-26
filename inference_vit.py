@@ -2,6 +2,7 @@
 """
 Inference script for Vision Transformer ESI model
 Loads trained model checkpoint and predicts source activity from EEG data
+Includes localization post-processing: thresholding and peak detection
 """
 
 import torch
@@ -16,6 +17,158 @@ from train_model import (
     evaluate_temporal_metrics
 )
 import scipy.io
+from scipy import signal
+
+
+def apply_threshold(predictions, threshold_method='relative', threshold_value=0.5, percentile=90):
+    """
+    Apply thresholding to identify activated sources
+    
+    Args:
+        predictions: (n_samples, time_steps, n_sources)
+        threshold_method: 'absolute' (use threshold_value) or 'relative' (use percentile)
+        threshold_value: Absolute threshold value (used if threshold_method='absolute')
+        percentile: Percentile threshold (used if threshold_method='relative', e.g., 90 means top 10%)
+    
+    Returns:
+        thresholded_predictions: (n_samples, time_steps, n_sources) with low values masked to 0
+        confidence_mask: Boolean mask of activated sources
+    """
+    if threshold_method == 'absolute':
+        threshold = threshold_value
+        confidence_mask = predictions > threshold
+    elif threshold_method == 'relative':
+        # Per-timepoint relative thresholding: keep top (100-percentile)% of sources
+        thresholds = np.percentile(predictions, percentile, axis=2, keepdims=True)
+        confidence_mask = predictions > thresholds
+        threshold = f"percentile {percentile}"
+    else:
+        raise ValueError(f"Unknown threshold_method: {threshold_method}")
+    
+    thresholded = predictions.copy()
+    thresholded[~confidence_mask] = 0
+    
+    print(f"Applied {threshold_method} thresholding (threshold={threshold})")
+    print(f"  Activated sources: {confidence_mask.sum() / confidence_mask.size * 100:.2f}% of all predictions")
+    
+    return thresholded, confidence_mask
+
+
+def detect_peaks(predictions, distance=5, prominence=None, height=None):
+    """
+    Detect temporal peaks in source activations
+    
+    Args:
+        predictions: (n_samples, time_steps, n_sources)
+        distance: Minimum distance between peaks (in time steps)
+        prominence: Minimum peak prominence (if None, uses mean activation per source)
+        height: Minimum peak height (if None, uses 0.1 * max per source)
+    
+    Returns:
+        peak_data: List of dicts with keys: sample_id, source_id, time, activation, prominence
+    """
+    peak_data = []
+    n_samples, n_time, n_sources = predictions.shape
+    
+    for sample_idx in range(n_samples):
+        for source_idx in range(n_sources):
+            signal_data = predictions[sample_idx, :, source_idx]
+            
+            # Skip if source has no activity
+            if signal_data.max() == 0:
+                continue
+            
+            # Detect peaks
+            peaks, properties = signal.find_peaks(
+                signal_data,
+                distance=distance,
+                prominence=prominence,
+                height=height
+            )
+            
+            # Store peak information
+            for peak_idx, peak_time in enumerate(peaks):
+                peak_data.append({
+                    'sample_id': sample_idx,
+                    'source_id': source_idx,
+                    'time': int(peak_time),
+                    'activation': float(signal_data[peak_time]),
+                    'prominence': float(properties['prominences'][peak_idx]) if 'prominences' in properties else None
+                })
+    
+    print(f"Detected {len(peak_data)} peaks across all sources and samples")
+    
+    return peak_data
+
+
+def get_sparse_predictions(predictions, threshold_method='relative', threshold_value=0.5, 
+                          percentile=90, detect_peaks_flag=True, distance=5, min_activation=None):
+    """
+    Convert dense predictions to sparse format (only activated sources)
+    
+    Args:
+        predictions: (n_samples, time_steps, n_sources)
+        threshold_method: 'absolute' or 'relative'
+        threshold_value: Absolute threshold
+        percentile: Percentile for relative thresholding
+        detect_peaks_flag: If True, apply peak detection; if False, use thresholding
+        distance: Minimum distance between peaks
+        min_activation: Minimum activation value to include in sparse output
+    
+    Returns:
+        sparse_predictions: List of dicts with keys: sample_id, source_id, time, activation
+        statistics: Dictionary with statistics about sparse predictions
+    """
+    
+    if detect_peaks_flag:
+        # Use peak detection
+        thresholded, _ = apply_threshold(
+            predictions, 
+            threshold_method=threshold_method,
+            threshold_value=threshold_value,
+            percentile=percentile
+        )
+        
+        sparse_preds = detect_peaks(
+            thresholded,
+            distance=distance,
+            prominence=None,
+            height=None
+        )
+    else:
+        # Use thresholding only
+        thresholded, _ = apply_threshold(
+            predictions,
+            threshold_method=threshold_method,
+            threshold_value=threshold_value,
+            percentile=percentile
+        )
+        
+        sparse_preds = []
+        n_samples, n_time, n_sources = thresholded.shape
+        
+        for sample_idx in range(n_samples):
+            for time_idx in range(n_time):
+                for source_idx in range(n_sources):
+                    activation = thresholded[sample_idx, time_idx, source_idx]
+                    
+                    if activation > 0 and (min_activation is None or activation >= min_activation):
+                        sparse_preds.append({
+                            'sample_id': sample_idx,
+                            'source_id': source_idx,
+                            'time': time_idx,
+                            'activation': float(activation)
+                        })
+    
+    # Compute statistics
+    stats = {
+        'total_entries': len(sparse_preds),
+        'n_samples': predictions.shape[0],
+        'n_active_sources': len(set(p['source_id'] for p in sparse_preds)),
+        'sparsity': 1.0 - (len(sparse_preds) / (predictions.shape[0] * predictions.shape[1] * predictions.shape[2]))
+    }
+    
+    return sparse_preds, stats
 
 
 def load_eeg_data(data_path, max_samples=None, start_sample=0, end_sample=None):
@@ -165,6 +318,111 @@ def run_inference(
     return predictions
 
 
+def run_inference_with_localization(
+    checkpoint_path,
+    eeg_data,
+    output_path=None,
+    device='auto',
+    batch_size=4,
+    threshold_method='relative',
+    threshold_value=0.5,
+    percentile=90,
+    detect_peaks_flag=True,
+    peak_distance=5,
+    min_activation=None,
+    save_sparse=True,
+    save_dense=False
+):
+    """
+    Run inference with source localization post-processing
+    
+    Args:
+        checkpoint_path: Path to trained model checkpoint
+        eeg_data: EEG data array (n_samples, 500, 75)
+        output_path: Base path for output files (without extension)
+        device: 'auto', 'cpu', or 'cuda'
+        batch_size: Batch size for inference
+        threshold_method: 'absolute' or 'relative'
+        threshold_value: Absolute threshold value
+        percentile: Percentile for relative thresholding
+        detect_peaks_flag: If True, use peak detection; else use thresholding
+        peak_distance: Minimum distance between peaks
+        min_activation: Minimum activation value for sparse output
+        save_sparse: If True, save sparse predictions
+        save_dense: If True, save dense thresholded predictions
+    
+    Returns:
+        sparse_predictions: Sparse source predictions
+        statistics: Dictionary with localization statistics
+    """
+    
+    # Get dense predictions
+    print("\n" + "="*60)
+    print("STEP 1: Running dense inference")
+    print("="*60)
+    predictions = run_inference(
+        checkpoint_path=checkpoint_path,
+        eeg_data=eeg_data,
+        output_path=None,  # Don't save dense yet
+        device=device,
+        batch_size=batch_size
+    )
+    
+    # Apply localization post-processing
+    print("\n" + "="*60)
+    print("STEP 2: Applying source localization post-processing")
+    print("="*60)
+    
+    sparse_predictions, stats = get_sparse_predictions(
+        predictions,
+        threshold_method=threshold_method,
+        threshold_value=threshold_value,
+        percentile=percentile,
+        detect_peaks_flag=detect_peaks_flag,
+        distance=peak_distance,
+        min_activation=min_activation
+    )
+    
+    print("\nLocalization Statistics:")
+    print("-" * 50)
+    print(f"Total activated regions: {stats['total_entries']}")
+    print(f"Number of samples: {stats['n_samples']}")
+    print(f"Number of active sources: {stats['n_active_sources']}")
+    print(f"Sparsity: {stats['sparsity']*100:.2f}% (zeros after localization)")
+    
+    # Save outputs
+    if output_path:
+        output_base = Path(output_path).stem
+        output_dir = Path(output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        if save_sparse:
+            # Save sparse predictions as MAT file
+            sparse_mat_path = output_dir / f"{output_base}_sparse_predictions.mat"
+            sparse_dict = {
+                'sample_id': np.array([p['sample_id'] for p in sparse_predictions]),
+                'source_id': np.array([p['source_id'] for p in sparse_predictions]),
+                'time': np.array([p['time'] for p in sparse_predictions]),
+                'activation': np.array([p['activation'] for p in sparse_predictions])
+            }
+            scipy.io.savemat(str(sparse_mat_path), sparse_dict)
+            print(f"\n✓ Sparse predictions saved: {sparse_mat_path}")
+        
+        if save_dense:
+            # Save thresholded dense predictions
+            thresholded, _ = apply_threshold(
+                predictions,
+                threshold_method=threshold_method,
+                threshold_value=threshold_value,
+                percentile=percentile
+            )
+            dense_mat_path = output_dir / f"{output_base}_thresholded.mat"
+            scipy.io.savemat(str(dense_mat_path), {'predictions': thresholded})
+            print(f"✓ Thresholded dense predictions saved: {dense_mat_path}")
+    
+    return sparse_predictions, stats
+
+
 def evaluate_with_ground_truth(predictions, source_data):
     """
     Evaluate predictions against ground truth source data
@@ -198,7 +456,7 @@ def evaluate_with_ground_truth(predictions, source_data):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Inference script for Vision Transformer ESI model'
+        description='Inference script for Vision Transformer ESI model with source localization'
     )
     
     # Model and data arguments
@@ -223,11 +481,31 @@ def main():
     parser.add_argument('--batch_size', type=int, default=4,
                         help='Batch size for inference')
     
+    # Source localization arguments
+    parser.add_argument('--enable_localization', action='store_true',
+                        help='Enable source localization post-processing (thresholding + peak detection)')
+    parser.add_argument('--threshold_method', type=str, default='relative', choices=['absolute', 'relative'],
+                        help='Thresholding method: absolute (fixed value) or relative (percentile)')
+    parser.add_argument('--threshold_value', type=float, default=0.5,
+                        help='Absolute threshold value (used if threshold_method=absolute)')
+    parser.add_argument('--percentile', type=int, default=90,
+                        help='Percentile threshold for relative thresholding (e.g., 90 keeps top 10%)')
+    parser.add_argument('--detect_peaks', action='store_true', default=True,
+                        help='Use temporal peak detection instead of simple thresholding')
+    parser.add_argument('--peak_distance', type=int, default=5,
+                        help='Minimum distance between detected peaks (in time steps)')
+    parser.add_argument('--min_activation', type=float, default=None,
+                        help='Minimum activation value for sparse output')
+    parser.add_argument('--save_sparse', action='store_true', default=True,
+                        help='Save sparse predictions (source_id, time, activation)')
+    parser.add_argument('--save_dense', action='store_true',
+                        help='Also save thresholded dense predictions')
+    
     args = parser.parse_args()
     
     # Load EEG data
     print("=" * 60)
-    print("Vision Transformer ESI - Inference")
+    print("Vision Transformer ESI - Inference with Source Localization")
     print("=" * 60)
     
     eeg_data = load_eeg_data(
@@ -238,17 +516,37 @@ def main():
     )
     print(f"EEG data shape: {eeg_data.shape}")
     
-    # Run inference
-    predictions = run_inference(
-        checkpoint_path=args.checkpoint,
-        eeg_data=eeg_data,
-        output_path=args.output,
-        device=args.device,
-        batch_size=args.batch_size
-    )
+    # Run inference with or without localization
+    if args.enable_localization:
+        print("\n✓ Source localization enabled")
+        sparse_predictions, stats = run_inference_with_localization(
+            checkpoint_path=args.checkpoint,
+            eeg_data=eeg_data,
+            output_path=args.output,
+            device=args.device,
+            batch_size=args.batch_size,
+            threshold_method=args.threshold_method,
+            threshold_value=args.threshold_value,
+            percentile=args.percentile,
+            detect_peaks_flag=args.detect_peaks,
+            peak_distance=args.peak_distance,
+            min_activation=args.min_activation,
+            save_sparse=args.save_sparse,
+            save_dense=args.save_dense
+        )
+        predictions = sparse_predictions
+    else:
+        print("\n✓ Running standard dense inference (no localization)")
+        predictions = run_inference(
+            checkpoint_path=args.checkpoint,
+            eeg_data=eeg_data,
+            output_path=args.output,
+            device=args.device,
+            batch_size=args.batch_size
+        )
     
     # Evaluate against ground truth if provided
-    if args.source_data:
+    if args.source_data and not args.enable_localization:
         print("\n" + "=" * 60)
         source_data = load_eeg_data(args.source_data)
         if source_data.shape[-1] == 75:

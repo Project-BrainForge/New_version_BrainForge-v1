@@ -20,3 +20,4 @@ inference_results/
 labeled_spikes_data/
 *.mat
 !labeled_spikes_data/**/*.mat
+ictal/

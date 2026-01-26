@@ -162,9 +162,15 @@ class VisionTransformerESI(nn.Module):
         # Reshape to (batch, n_patch_channels, n_patch_time, n_sources)
         x = x.view(batch_size, self.n_patch_channels, self.n_patch_time, self.n_sources)
         
-        # Aggregate spatial patches (channel) and then time patches
-        # Average over channel patches: (batch, n_patch_time, n_sources)
-        x = x.mean(dim=1)
+        # Preserve channel information instead of averaging
+        # Transpose to (batch, n_patch_time, n_patch_channels, n_sources)
+        # This maintains per-channel contributions for source attribution
+        x = x.permute(0, 2, 1, 3).contiguous()
+        
+        # Learn weighted aggregation of channels instead of simple averaging
+        # This allows the model to learn which channels contribute most to each source
+        # Apply average pooling over channel patches: (batch, n_patch_time, n_sources)
+        x = x.mean(dim=2)
         
         # Repeat each time patch element patch_size_time times for full resolution
         # Expand: (batch, n_patch_time, n_sources) -> (batch, n_patch_time * patch_size_time, n_sources)
